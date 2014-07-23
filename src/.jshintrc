@@ -1,0 +1,8 @@
+{
+    "jquery"        : true,
+    "predef"        : [  // Custom globals.
+        //"exampleVar",
+        //"anotherCoolGlobal",
+        //"iLoveDouglas"
+    ]
+}

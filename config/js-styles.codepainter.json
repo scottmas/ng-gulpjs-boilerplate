@@ -1,0 +1,12 @@
+{
+    "indent_style":"space",
+    "indent_size":4,
+    "insert_final_newline":false,
+    "quote_type":"single",
+    "space_after_anonymous_functions":false,
+    "space_after_control_statements":false,
+    "spaces_around_operators":"hybrid",
+    "trim_trailing_whitespace":true,
+    "spaces_in_brackets":"hybrid",
+    "end_of_line":"lf"
+}
