@@ -1,3 +1,6 @@
+/*Begin imports*/ @import 'mixins'; @import 'placeholders'; @import 'variables'; /*End imports*/
 .components-blogFeed{
-  color: blue;
+  .someClass{
+    color: blue;
+  }
 }

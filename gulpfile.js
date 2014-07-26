@@ -10,12 +10,12 @@ var express = require('express'),
     map     = require('map-stream'),
     fs      = require('fs');
 
-//Saves you from your own stupidity when you try to run CLI gulp tasks outside project root
+//Gulp lets you do commands INSIDE your project, not just at root. This change makes this script still work even in those cases
 process.chdir(__dirname);
 
 //Define the files that will be manipulated in the build steps
 var files = {};
-files.scripts = glob(flatten([
+files.scripts =flatten([
    getBower('js'),
    'src/common/libs/**/*.js',
    'src/app.js',
@@ -23,34 +23,53 @@ files.scripts = glob(flatten([
    'src/components/**/*.js',
    'src/pages/**/*.js',
    '!src/**/*.spec.js'
-]));
+]);
 
-files.styles = glob(flatten([
-   getBower('css'),
-   'src/common/libs/**/*.css',
+files.styles = flatten([
    'src/common/**/*.scss',
    'src/components/**/*.scss',
    'src/pages/**/*.scss',
-   '!src/common/styleVariables/**/*.scss'
-]));
+   '!src/common/styleVariables/*.scss'
+]);
 
-files.templates = glob(flatten([
+files.libCss = flatten([
+   getBower('css'),
+   'src/common/libs/**/*.css',
+]);
+
+files.templates = flatten([
    'src/common/**/*.jade',
    'src/components/**/*.jade',
    'src/pages/**/*.jade',
-]));
+]);
 
-files.karma = glob(flatten([
-   files['scripts'],
+files.karma = flatten([
+   glob(files['scripts']),
    getBower('js', {devDependencies: true, dependencies: false, exclude: 'bootstrap-sass-official'}), //Convuluted way to get dev only libraries from bower, like angular-mocks
    'src/**/*.spec.js'
-]));
+]);
 
 
 /* DEVELOPMENT ONLY TASKS */
 /**************************/
 
-gulp.task('dev', ['dev:scripts', 'dev:styles', 'dev:templates', 'server']);
+gulp.task('dev', ['dev:scripts', 'dev:styles', 'dev:templates', 'dev:server'], function(){
+
+
+   //Helps you remember to restart the dev task and its watchers after you modify the directory structure.
+   $.watch({glob: ['src/**', '!src/vendor/**', '!src/e2e/**']})
+      .pipe(errorOnAddOrDelete());
+
+   function errorOnAddOrDelete(){
+      return map(function(file, cb){
+         if(file.event == 'deleted' || file.event == 'added'){
+            $.util.beep();
+            throw new Error("Stop everything");
+         }
+      })
+   }
+});
+
 
 gulp.task('dev:scripts', function(){
 
@@ -66,29 +85,33 @@ gulp.task('dev:scripts', function(){
 
 });
 
-
-gulp.task('dev:styles', ['build-bootstrap-css'], function(){
-
-   //Watch the styleVariables directory and set styleVars.
-   //styleVars will be prepended to all scss files before the compilation to css.
-   var styleVarFiles = 'src/common/styleVariables/**/*.scss';
-   var styleVars = readGlob(styleVarFiles);
-   gulp.watch(styleVarFiles, function(){
-      styleVars = readGlob(styleVarFiles)
-   });
+/*
+ *  The style task is the most complicated of all the build steps, mostly because the existing build libraries aren't super robust and require numerous workarounds.
+ *  The steps are as follows:
+ *    (1) Generate a custom build of twitter bootstrap using the style variables found in src/styleVariables.
+ *    (2) Prepend imports to our mixin and variable files found in src/styleVariables. This enables us to:
+ *        (a) Not have to manually import every single new scss file we make while still giving us access to variables and mixins
+ *        (b) Rebuild individual scss files on change, reducing compile times on huge projects
+ *    (3) Fix the file paths in gulp src to be relative and unix like. Otherwise, sass source mapping breaks.
+ *    (4) Ensure the file will compile to css. If we don't do this, livereload and gulp-watch break on error, even with plumber.
+ *    (5) Add prefixes to all our css 3 styles. The "hack" optoins are required for the plugin to be compatible with source maps.
+ *
+ */
+gulp.task('dev:styles', ['build-bootstrap-css', 'prepend-imports'], function(){
 
    //Watch styles and rebuild on changes
    gulp.src(files['styles'])
       .pipe($.watch())
       .pipe($.plumber())
-      .pipe($.insert.prepend(styleVars))
-      .pipe(sassHandler())
-      .pipe($.autoprefixer('last 1 version'))
+      .pipe(fixFilePaths())
+      .pipe(ensureCompiles())
+      .pipe($.sass({sourceComments: 'map', sourceMap: 'a', includePaths: ['src/common/styleVariables']}))
+      .pipe($.autoprefixer('last 1 version', {map: true, from: 'a', to: 'a'}))//The "a" values are necessary to make it work with sass source-maps
       .pipe(write())
       .pipe(reload());
 
    //Inject style tags into index.html
-   return gulp.src(files['styles'])
+   return gulp.src(files['libCss'].concat(files['styles']))
       .pipe($.rename({extname: '.css'}))
       .pipe($.inject('src/index.html', {ignorePath: 'src', addRootSlash: false}))
       .pipe(write());
@@ -114,7 +137,7 @@ gulp.task('dev:templates', function(){
 });
 
 //Spins up a static asset server at localhost:8080 and a livereload server at the default port
-gulp.task('server', function(){
+gulp.task('dev:server', function(){
    var livereloadport = 35729,
       serverport = 8080,
       server = express();
@@ -140,7 +163,7 @@ function reload(){
    return map(function(file, cb){
       if(!reload[file.path]) reload[file.path] = true; //Prevents livereload from firing on the initial file load.
       else{
-         if(path.extname(file.path) == '.css'){ //Sadly, only css can update w/o refreshing the page.
+         if(path.extname(file.path) == '.css'){ //Only css can update w/o refreshing the entire page.
             $.livereload.changed({path: file.path, type: 'changed'});
          }
          else{
@@ -150,6 +173,38 @@ function reload(){
       cb(null, file);
    });
 }
+
+//Prepends all scss files with imports to the files in the styleVariables folder.
+gulp.task('prepend-imports', function(){
+
+   var startFlag = '/*Begin imports*/ ';
+   var imports = glob('src/common/styleVariables/*.scss').map(function(val){
+      return "@import '" + path.basename(val, '.scss') + "'; ";
+   }).join('');
+   var endFlag = '/*End imports*/';
+
+   var importString = [startFlag, imports, endFlag, '\n'].join('');
+
+   glob(files['styles']).forEach(function(filePath){
+      //Only scss files
+      if(path.extname(filePath) !== '.scss')
+         return;
+
+      var thisFile = fs.readFileSync(filePath).toString();
+
+      //The file already has the requisite imports
+      if(thisFile.indexOf(importString) !== -1)
+         return;
+
+      //styleVariables folder has changed
+      if(thisFile.indexOf(startFlag) !== -1){
+         thisFile = thisFile.slice(thisFile.indexOf(endFlag) + endFlag.length + 1);
+      }
+
+      fs.writeFileSync(filePath, importString + thisFile);
+
+   });
+});
 
 /* BUILD AND DEPLOYMENT TASKS */
 /******************************/
@@ -162,7 +217,7 @@ gulp.task('build-bootstrap-css', function(){
    //Instead of using the file variables.scss defined in bower, replace it with your our own variables file
    fileContents.some(function(val, i){
       if(val.indexOf('variables') !== -1 && val.indexOf('@import') !== -1){
-         fileContents[i] = readGlob("src/common/styleVariables/**/*.scss");
+         fileContents[i] = readGlob("src/common/styleVariables/*.scss");
          return true;
       }
    });
@@ -222,7 +277,7 @@ gulp.task('pre-commit',  function () {
 /*     Helper Functions      */
 /*****************************/
 
-//Writes files to their path, which will have been modified somewhere along the stream.
+//Writes files to their path, whatever it may currently be in the stream.
 function write(){
    return map(function(file, cb){
       fs.writeFile(file.path, String(file.contents), function(){
@@ -244,6 +299,7 @@ function readGlob(someGlob){
 //A thin wrapper for the excellent wiredep library.
 function getBower(ext, opts){
    var files = require('wiredep')(opts);
+   //Make paths relative to project root
    if(files[ext] && files[ext].length){
       return files[ext].map(function(val){
          return unixifyPath(path.relative(process.cwd(), val))
@@ -251,19 +307,24 @@ function getBower(ext, opts){
    } else return [];
 }
 
-//A thin wrapper for node-sass. We don't use gulp-sass because a) it's not really doing much, and b) errors on it break livereload, even with plumber
-function sassHandler(opts){
+//Node-sass source maps only work when the file path is relative and unixified.
+function fixFilePaths(){
+   return map(function(file, cb){
+      file.path = unixifyPath(path.relative(file.cwd, file.path));
+      cb(null, file);
+   })
+};
+
+//Gulp watch and source maps don't play nicely together. Have to do a simple renderSync (regular render breaks) to make sure
+function ensureCompiles(){
    return map(function(file, cb){
       try{
-         opts = opts || {};
-         opts.data = String(file.contents);
-         file.path = $.util.replaceExtension(file.path, '.css');
-         file.contents = new Buffer(sass.renderSync(opts));
+         sass.renderSync({data: String(file.contents), includePaths: ['src/common/styleVariables']})
+         cb(null, file); //All is well. Let the file pass down the stream.
       } catch(err){
-         logError("Problem in scss file " + $.util.replaceExtension(file.path, '.scss') + ":\n " + err);
+         cb(); //Remove the file from the stream.
       }
-      cb(null, file); //Even when it errors, return the stream. Livereload breaks unless you do this.
-   });
+   })
 }
 
 //Used for the pre-commit hook

@@ -1,3 +1,15 @@
-.nav-menu{
-  color: blue
+/*Begin imports*/ @import 'mixins'; @import 'placeholders'; @import 'variables'; /*End imports*/
+
+.another-class{
+  color:red;
+  display: flex;
 }
+
+
+html{
+  .nav-menu{
+    display: flex;
+    color: asdf;
+  }
+}
+
