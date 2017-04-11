@@ -4,7 +4,8 @@
   "description": "",
   "main": "gulpfile.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node testserver.js"
   },
   "author": "Scott M Ashton <ScottMortonAshton@gmail.com> (https://github.com/scottmas)",
   "license": "ISC",
